@@ -1,0 +1,68 @@
+SELECT
+  timestamp_micros(event_timestamp) AS event_time,
+  user_pseudo_id,
+  (SELECT value.int_value FROM e.event_params WHERE key = 'ga_session_id') AS ga_session_id,
+  event_name,
+  geo.country AS country,
+  device.category,
+  traffic_source.source AS source,
+  traffic_source.medium AS medium,
+  traffic_source.name AS campaign_name
+FROM
+  `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*` AS e
+WHERE
+  _TABLE_SUFFIX BETWEEN '20210101' AND '20211231'
+  AND event_name IN (
+    'session_start',
+    'view_item',
+    'add_to_cart',
+    'begin_checkout',
+    'add_shipping_info',
+    'add_payment_info',
+    'purchase'
+  )
+  ;
+
+
+WITH sessions_data AS (
+  SELECT
+    date(timestamp_micros(event_timestamp)) AS event_date,
+    event_name,
+    user_pseudo_id,
+    traffic_source.source AS source,
+    traffic_source.medium AS medium,
+    traffic_source.name AS campaign,
+    CONCAT(user_pseudo_id, (SELECT value.int_value FROM e.event_params WHERE key='ga_session_id')) AS user_session_id
+  FROM
+    `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*` AS e
+),
+
+conversion_data AS (
+  SELECT
+    user_session_id,
+    count(distinct user_session_id) AS user_sessions_count,
+    count(distinct case when event_name='session_start' then user_session_id end) AS session_start_count,
+    count(distinct case when event_name='add_tocart' then user_session_id end) AS add_to_cart_count,
+    count(distinct case when event_name='begin_checkout' then user_session_id end) AS begin_checkout_count,
+    count(distinct case when event_name='purchase' then user_session_id end) AS purchase_count
+  FROM
+    `sessions_data`
+  GROUP BY 1
+)
+
+SELECT
+  event_name,
+  sessions_data.event_date,
+  sessions_data.source AS source,
+  sessions_data.medium AS medium,
+  sessions_data.campaign AS campaign,
+  conversion_data.user_sessions_count,
+  CASE WHEN conversion_data.session_start_count = 0 THEN null
+    ELSE conversion_data.add_to_cart_count / conversion_data.session_start_count END AS visit_to_cart,
+  CASE WHEN conversion_data.session_start_count = 0 THEN null
+    ELSE conversion_data.begin_checkout_count / conversion_data.session_start_count END AS visit_to_checkout ,
+  CASE WHEN conversion_data.session_start_count = 0 THEN null
+    ELSE conversion_data.purchase_count / conversion_data.session_start_count END AS visit_to_purchase
+FROM conversion_data
+JOIN sessions_data ON conversion_data.user_session_id = sessions_data.user_session_id
+;
